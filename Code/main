@@ -1,0 +1,116 @@
+import numpy as np
+import cv2
+import dlib
+import matplotlib.pyplot as plt
+from keras.preprocessing.image import img_to_array
+from keras.models import load_model
+from imutils import face_utils
+import imutils
+
+detector = dlib.get_frontal_face_detector()
+predictor = dlib.shape_predictor("Stress-Detection-master\shape_predictor_68_face_landmarks.dat\shape_predictor_68_face_landmarks.dat")
+emotion_classifier = load_model("Stress-Detection-master\_mini_XCEPTION.102-0.66.hdf5", compile=False)
+
+cap = cv2.VideoCapture(0)
+
+def eye_brow_distance(leye, reye):
+    distq = np.linalg.norm(leye - reye)
+    return distq
+
+def emotion_finder(faces, frame):
+    EMOTIONS = ["angry", "disgust", "scared", "happy", "sad", "surprised", "neutral"]
+    x, y, w, h = face_utils.rect_to_bb(faces)
+    frame = frame[y:y + h, x:x + w]
+    roi = cv2.resize(frame, (64, 64))
+    roi = roi.astype("float") / 255.0
+    roi = img_to_array(roi)
+    roi = np.expand_dims(roi, axis=0)
+    preds = emotion_classifier.predict(roi)[0]
+    emotion_probability = np.max(preds)
+    label = EMOTIONS[preds.argmax()]
+    if label in ['scared', 'sad', 'angry', 'digust']:
+        label = 'stressed'
+    else:
+        label = 'not stressed'
+    return label
+
+def normalize_values(points, disp):
+    normalized_value = abs(disp - np.min(points)) / abs(np.max(points) - np.min(points))
+    stress_value = np.exp(-(normalized_value))
+    print(stress_value)
+    if stress_value >= 75:
+        return stress_value, "High Stress"
+    else:
+        return stress_value, "low_stress"
+
+points = []
+
+while True:
+    _, frame = cap.read()
+    frame = cv2.flip(frame, 1)
+    frame = imutils.resize(frame, width=500, height=500)
+
+    (lBegin, lEnd) = face_utils.FACIAL_LANDMARKS_IDXS["left_eye"]
+    (rBegin,rEnd) = face_utils.FACIAL_LANDMARKS_IDXS["right_eye"]
+    (lBegin_brow, lEnd_brow) = face_utils.FACIAL_LANDMARKS_IDXS["left_eyebrow"]
+    (rBegin_brow, rEnd_brow) = face_utils.FACIAL_LANDMARKS_IDXS["right_eyebrow"]
+
+    #Define lip landmarks
+    (lipBegin, lipEnd) = face_utils.FACIAL_LANDMARKS_IDXS["mouth"]
+
+
+    #Preprocessing the image
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+
+    #Define cheek landmarks
+    (lBegin_eye, lEnd_eye) = face_utils.FACIAL_LANDMARKS_IDXS["left_eye"]
+    (rBegin_eye, rEnd_eye) = face_utils.FACIAL_LANDMARKS_IDXS["right_eye"]
+    (lipBegin, lipEnd) = face_utils.FACIAL_LANDMARKS_IDXS["mouth"]
+
+    #Detect faces in the image
+    detections = detector(gray, 0)
+
+#Loop over the detections
+    for detection in detections:
+
+        # Get facial landmarks for the detected face
+        shape = predictor(gray, detection)
+        shape = face_utils.shape_to_np(shape)
+
+        # Extract cheek landmarks
+        cheek_l = shape[lEnd_eye:lipBegin]
+        cheek_r = shape[rEnd_eye:lipBegin]
+
+        # Convert cheek landmarks to integer coordinates for drawing
+        cheek_l = cheek_l.astype(int)
+        cheek_r = cheek_r.astype(int)
+
+        # Draw lip contour
+        for i in range(0, len(shape[lipBegin:lipEnd]) - 1, 2):
+            cv2.line(frame, shape[lipBegin + i], shape[lipBegin + i + 1], (0, 255, 0), 1)
+
+        # Draw cheek contours
+        for i in range(0, len(cheek_l) - 1, 2):
+            cv2.line(frame, cheek_l[i], cheek_l[i + 1], (0, 255, 0), 1)
+
+        for i in range(0, len(cheek_r) - 1, 2):
+            cv2.line(frame, cheek_r[i], cheek_r[i + 1], (0, 255, 0), 1)
+
+        # Calculate stress level
+        distq = eye_brow_distance(shape[lBegin_brow], shape[rBegin_brow])
+        stress_value, stress_label = normalize_values(points, distq)
+
+        # Display stress level on the screen
+        cv2.putText(frame, "stress level:{}".format(str(int(stress_value * 100))), (20, 40), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+
+        cv2.imshow("Frame", frame)
+
+        key = cv2.waitKey(1) & 0xFF
+        if key == ord('q'):
+            break
+
+    cv2.destroyAllWindows()
+    cap.release()
+    plt.plot(range(len(points)), points, 'ro')
+    plt.title("Stress Levels")
+    plt.show()
